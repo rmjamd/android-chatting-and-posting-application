@@ -1,0 +1,40 @@
+{
+  "project_info": {
+    "project_number": "647483888206",
+    "firebase_url": "https://nevigationview-c2474.firebaseio.com",
+    "project_id": "nevigationview-c2474",
+    "storage_bucket": "nevigationview-c2474.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:647483888206:android:85c31b62a25f6410e2291f",
+        "android_client_info": {
+          "package_name": "com.example.nevigationview"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "647483888206-3esufat3i4llj8c9n5orh8v466bmuj2q.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCOYhQTB-SydHP1tdckncR56wah6lN-lYs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "647483888206-3esufat3i4llj8c9n5orh8v466bmuj2q.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
