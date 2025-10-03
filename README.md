@@ -1,1240 +1,1100 @@
 # Top-K Leaderboard System Design - Scaling from 0 to Millions
 
 ## Table of Contents
-1. [Problem Statement](#problem-statement)
+1. [Overview](#overview)
 2. [Scaling Journey: 0 to Millions](#scaling-journey-0-to-millions)
 3. [Functional Requirements](#functional-requirements)
 4. [Non-Functional Requirements](#non-functional-requirements)
 5. [Capacity Estimation](#capacity-estimation)
-6. [Architecture Approaches & Alternatives](#architecture-approaches--alternatives)
-7. [Detailed System Design](#detailed-system-design)
-8. [Database Schema Design](#database-schema-design)
-9. [Performance Optimizations](#performance-optimizations)
-10. [Monitoring and Observability](#monitoring-and-observability)
-11. [System Architecture Diagrams](#system-architecture-diagrams)
-12. [Conclusion](#conclusion)
+6. [System Architecture](#system-architecture)
+7. [Data Flow Architecture](#data-flow-architecture)
+8. [Detailed Processing Architecture](#detailed-processing-architecture)
+9. [Database Schema](#database-schema)
+10. [Caching Strategy](#caching-strategy)
+11. [Count-Min Sketch Deep Dive](#count-min-sketch-deep-dive)
+12. [Query Processing Flow](#query-processing-flow)
+13. [Fault Tolerance & Recovery](#fault-tolerance--recovery)
+14. [Production-Level Considerations](#production-level-considerations)
+15. [Advanced Algorithms & Optimizations](#advanced-algorithms--optimizations)
+16. [Data Lifecycle & Storage Tiers](#data-lifecycle--storage-tiers)
 
-## Problem Statement
+## Overview
 
-Design a distributed system to find the top-K most popular events over arbitrary time ranges. Examples include:
-- Top-K search terms on Google over any time period
-- Top-K most viewed YouTube videos
-- Top-K most played songs on Spotify this week
-- Top-K trending hashtags on social media
-
-**Key Challenge**: Handle billions of events per day while providing fast reads for arbitrary time ranges and K values.
+A Top-K Leaderboard system that efficiently tracks and displays the most frequent events in real-time, scaling from a simple MVP to handling millions of events per second. This design focuses on the architectural evolution and decision-making process behind each technology choice.
 
 ## Scaling Journey: 0 to Millions
 
 ### Phase 1: MVP (0-1K users)
-**Requirements:**
-- Simple leaderboard for single event type
-- Basic time windows (hour, day)
-- Small K values (top 10-50)
-
-**Architecture:**
-```
-Client → API → Database → Response
-```
+**Architecture:** Client → API → Database → Response
 
 **Why this approach:**
 - **Simplicity**: Single database handles everything
 - **Cost-effective**: Minimal infrastructure
-- **Fast development**: Can be built in days
+- **Fast development**: Quick to market
 
-**Alternatives considered:**
-- **In-memory cache**: Too volatile for persistence
-- **File-based storage**: Poor query performance
-- **NoSQL**: Overkill for simple queries
+**Technology choices:**
+- **PostgreSQL**: ACID compliance, SQL familiarity
+- **Redis**: Simple caching for performance
+- **Node.js/Python**: Rapid development
+
+**Limitations:**
+- Single point of failure
+- Vertical scaling only
+- No real-time processing
 
 ### Phase 2: Growth (1K-100K users)
-**Requirements:**
-- Multiple event types
-- Real-time updates
-- Caching for performance
+**Architecture:** Client → Load Balancer → API → Cache → Database
 
-**Architecture:**
-```
-Client → Load Balancer → API → Cache → Database
-```
+**Why we need to evolve:**
+- **Performance**: Database becomes bottleneck
+- **Reliability**: Need redundancy
+- **Scalability**: Horizontal scaling required
 
-**Why this approach:**
-- **Caching**: Reduces database load by 80-90%
-- **Load balancing**: Handles traffic spikes
-- **Database optimization**: Indexes and partitioning
+**Technology additions:**
+- **Load Balancer**: Distribute traffic
+- **Read Replicas**: Scale read operations
+- **Connection Pooling**: Manage database connections
+- **CDN**: Cache static content globally
 
-**Alternatives considered:**
-- **Read replicas**: More complex than caching
-- **CDN**: Not suitable for dynamic data
-- **Microservices**: Premature optimization
+**Decision rationale:**
+- **Load Balancer**: Nginx chosen for simplicity and performance
+- **Read Replicas**: PostgreSQL streaming replication
+- **Connection Pooling**: PgBouncer for connection management
 
 ### Phase 3: Scale (100K-1M users)
-**Requirements:**
-- Multiple regions
-- Event streaming
-- Approximate algorithms
+**Architecture:** Client → CDN → Load Balancer → API Gateway → Microservices → Message Queue → Processing → Storage
 
-**Architecture:**
-```
-Client → CDN → Load Balancer → API → Message Queue → Stream Processing → Multiple Databases
-```
+**Why we need streaming:**
+- **Real-time requirements**: Users expect instant updates
+- **Volume**: Database can't handle write load
+- **Complexity**: Need event-driven architecture
 
-**Why this approach:**
-- **Message queues**: Decouple ingestion from processing
-- **Stream processing**: Real-time aggregation
-- **Approximate algorithms**: Trade accuracy for speed
+**Technology evolution:**
+- **Apache Kafka**: Event streaming platform
+- **Apache Spark Streaming**: Real-time processing
+- **Microservices**: Service decomposition
+- **API Gateway**: Request routing and management
 
-**Alternatives considered:**
-- **Batch processing only**: Too slow for real-time
-- **Exact algorithms only**: Too expensive for scale
-- **Single region**: Latency issues
+**Why Kafka over alternatives:**
+- **Durability**: Messages persisted to disk
+- **Scalability**: Horizontal partitioning
+- **Fault tolerance**: Replication across brokers
+- **Performance**: High throughput, low latency
+
+**Why Spark Streaming over alternatives:**
+- **Micro-batch processing**: Balances latency and throughput
+- **Fault tolerance**: Automatic recovery from failures
+- **Scalability**: Dynamic resource allocation
+- **Integration**: Works well with Kafka
 
 ### Phase 4: Enterprise (1M+ users)
-**Requirements:**
-- Global distribution
-- Sub-second latency
-- 99.99% availability
+**Architecture:** Multi-region, event-driven, microservices with advanced data processing
 
-**Architecture:**
-```
-Global CDN → Multi-Region Load Balancers → Microservices → Event Streaming → Distributed Processing → Multi-Database
-```
+**Why we need advanced processing:**
+- **Memory constraints**: Can't store all data in memory
+- **Accuracy vs Performance**: Need approximate algorithms
+- **Time-series data**: Historical analysis requirements
 
-**Why this approach:**
-- **Global CDN**: Reduces latency worldwide
-- **Multi-region**: Fault tolerance and performance
-- **Microservices**: Independent scaling and deployment
-
-**Alternatives considered:**
-- **Monolithic architecture**: Scaling bottlenecks
-- **Single database**: Single point of failure
-- **Synchronous processing**: Performance limitations
+**Advanced technologies:**
+- **Count-Min Sketch**: Probabilistic data structure
+- **Time Series Database**: Optimized for time-based queries
+- **HDFS**: Distributed storage for historical data
+- **Multi-region deployment**: Global availability
 
 ## Functional Requirements
 
 ### Core Features
-1. **Event Ingestion**
-   - Accept high-volume event streams (millions per second)
-   - Support various event types (search terms, video views, song plays)
-   - Maintain event timestamps for time-range queries
+1. **Real-time Event Tracking**
+   - Track events as they occur
+   - Support multiple event types
+   - Handle high-frequency events
 
-2. **Top-K Queries**
-   - Support arbitrary time ranges (last hour, last week, custom date range)
-   - Support variable K values (typically K < 1000)
-   - Return ranked results with counts
+2. **Top-K Leaderboard Generation**
+   - Calculate top-K most frequent events
+   - Support different time windows (1min, 5min, 1hour, 1day)
+   - Handle multiple K values (10, 50, 100)
 
-3. **Data Persistence**
-   - Store all events for exact queries
-   - Maintain aggregated data for fast approximate queries
-   - Support both real-time and batch processing
+3. **Query Interface**
+   - RESTful API for leaderboard queries
+   - Support filtering by event type and time range
+   - Real-time and historical queries
 
-### API Requirements
-```
-POST /events
-{
-  "eventId": "song_123",
-  "eventType": "song_play",
-  "timestamp": "2024-01-15T10:30:00Z",
-  "userId": "user_456",
-  "metadata": {...}
-}
+4. **Admin Interface**
+   - Configure event types and schemas
+   - Monitor system health
+   - Manage data retention policies
 
-GET /leaderboard?timeRange=last_3_hours&k=10&eventType=song_play
-Response:
-{
-  "timeRange": "2024-01-15T07:30:00Z to 2024-01-15T10:30:00Z",
-  "results": [
-    {"eventId": "song_123", "count": 1500000, "rank": 1},
-    {"eventId": "song_456", "count": 1200000, "rank": 2},
-    ...
-  ]
-}
-```
+### Advanced Features
+1. **Multi-tenancy Support**
+   - Isolate data by tenant
+   - Tenant-specific configurations
+   - Usage analytics per tenant
+
+2. **Event Schema Management**
+   - Dynamic schema evolution
+   - Schema validation
+   - Backward compatibility
+
+3. **Alerting System**
+   - Threshold-based alerts
+   - Anomaly detection
+   - Real-time notifications
 
 ## Non-Functional Requirements
 
-### Performance Requirements
-- **Write Latency**: < 10ms for event ingestion
-- **Read Latency**: < 100ms for approximate queries, < 5s for exact queries
-- **Throughput**: 100,000+ events/second ingestion
-- **Availability**: 99.9% uptime
+### Performance
+- **Latency**: < 100ms for real-time queries
+- **Throughput**: 1M+ events/second
+- **Availability**: 99.99% uptime
+- **Scalability**: Linear scaling with load
 
-### Scalability Requirements
-- **Horizontal Scaling**: Support adding nodes dynamically
-- **Data Volume**: Handle 1 billion+ events per day
-- **Storage**: Efficiently store and retrieve large datasets
-- **Geographic Distribution**: Support multi-region deployment
+### Reliability
+- **Fault Tolerance**: System continues operating with component failures
+- **Data Consistency**: Eventual consistency acceptable
+- **Recovery Time**: < 5 minutes for service recovery
 
-### Consistency Requirements
-- **Eventual Consistency**: Acceptable for approximate queries
-- **Strong Consistency**: Required for exact queries
-- **Data Durability**: Zero data loss guarantee
+### Security
+- **Authentication**: OAuth 2.0 / JWT tokens
+- **Authorization**: Role-based access control
+- **Data Encryption**: TLS in transit, AES-256 at rest
+- **Audit Logging**: Complete audit trail
 
-### Reliability Requirements
-- **Fault Tolerance**: Handle node failures gracefully
-- **Data Backup**: Regular backups with point-in-time recovery
-- **Disaster Recovery**: Cross-region replication
+### Maintainability
+- **Monitoring**: Comprehensive metrics and logging
+- **Deployment**: Blue-green deployments
+- **Documentation**: API documentation and runbooks
 
 ## Capacity Estimation
 
-### Data Volume Calculations
-
+### Event Volume Analysis
 **Assumptions:**
-- 100,000 events/second average (Google-scale)
-- Peak traffic: 3x average = 300,000 events/second
-- Event size: 200 bytes average
-- Retention period: 1 year
+- 1M active users
+- 10 events per user per minute
+- Peak traffic: 3x average
+- Event size: 1KB average
 
-**Daily Calculations:**
-```
-Events per day = 100,000 × 86,400 = 8.64 billion events
-Daily data volume = 8.64B × 200 bytes = 1.73 TB/day
-Annual storage = 1.73 TB × 365 = 631 TB/year
-```
+**Calculations:**
+- Average events/second: (1M users × 10 events/min) / 60 = 166,667 events/sec
+- Peak events/second: 166,667 × 3 = 500,000 events/sec
+- Daily event volume: 500,000 × 86,400 = 43.2 billion events/day
+- Daily data volume: 43.2B × 1KB = 43.2TB/day
 
-**Storage Requirements:**
-- Raw events (Parquet): 631 TB/year
-- Aggregated data: ~50 TB/year (compressed)
-- Indexes and metadata: ~20 TB/year
-- **Total storage needed: ~700 TB/year**
+### Storage Requirements
+**Raw Event Storage:**
+- Daily: 43.2TB
+- Monthly: 43.2TB × 30 = 1.3PB
+- Annual: 1.3PB × 12 = 15.6PB
 
-### Network Bandwidth
-```
-Peak ingestion = 300,000 events/sec × 200 bytes = 60 MB/sec
-Replication factor = 3
-Total network = 60 MB/sec × 3 = 180 MB/sec per region
-```
+**Processed Data Storage:**
+- Leaderboard snapshots: 1GB/day
+- Time-series data: 100GB/day
+- Metadata: 10MB/day
 
-### Memory Requirements
-```
-Count-Min Sketch per node:
-- Hash functions: 5
-- Buckets per function: 1M
-- Memory per sketch: 5 × 1M × 4 bytes = 20 MB
-- Multiple sketches per node: 20 MB × 10 = 200 MB
-```
+### Network Requirements
+**Ingress Traffic:**
+- Peak: 500,000 events/sec × 1KB = 500MB/sec = 4Gbps
+- Average: 166,667 events/sec × 1KB = 166MB/sec = 1.3Gbps
+
+**Egress Traffic:**
+- API responses: 10% of ingress = 400Mbps peak
+- Inter-service communication: 20% of ingress = 800Mbps peak
 
 ### Compute Requirements
-```
-Spark Streaming nodes: 20 nodes
-- CPU: 16 cores per node
-- RAM: 64 GB per node
-- Storage: 2 TB SSD per node
-
-Count-Min Sketch servers: 5 nodes
-- CPU: 32 cores per node
-- RAM: 128 GB per node
-- Network: 10 Gbps per node
-```
-
-## Architecture Approaches & Alternatives
-
-### Approach 1: Exact Solution (Batch Processing)
-
-**Architecture:**
-```
-Events → Message Queue → Batch Processing → Data Warehouse → Results
-```
-
-**Why choose this:**
-- **Accuracy**: 100% precise results
-- **Flexibility**: Handles any time range
-- **Compliance**: Meets audit requirements
-
-**When to use:**
-- Business analytics and reporting
-- Compliance and audit trails
-- Historical data analysis
-- Financial calculations
-
-**Alternatives considered:**
-- **Real-time processing**: Too expensive for exact calculations
-- **Approximate algorithms**: Insufficient accuracy
-- **In-memory processing**: Limited by memory constraints
-
-**Trade-offs:**
-- ✅ **Accuracy**: Perfect results
-- ❌ **Latency**: 5-30 seconds
-- ❌ **Cost**: High computational resources
-- ❌ **Complexity**: Requires data engineering expertise
-
-### Approach 2: Approximate Solution (Stream Processing)
-
-**Architecture:**
-```
-Events → Message Queue → Stream Processing → Time Series DB → Fast Queries
-```
-
-**Why choose this:**
-- **Speed**: Sub-100ms response times
-- **Cost**: Efficient resource usage
-- **Scalability**: Handles millions of events
-- **Real-time**: Immediate updates
-
-**When to use:**
-- User-facing dashboards
-- Real-time monitoring
-- Gaming leaderboards
-- Social media trends
-
-**Alternatives considered:**
-- **Batch processing**: Too slow for real-time
-- **Exact algorithms**: Too expensive at scale
-- **Simple counting**: Insufficient for complex queries
-
-**Trade-offs:**
-- ✅ **Speed**: Very fast responses
-- ✅ **Cost**: Efficient resource usage
-- ❌ **Accuracy**: 95-99% accuracy
-- ❌ **Flexibility**: Limited time granularity
-
-### Approach 3: Hybrid Solution (Recommended)
-
-**Architecture:**
-```
-Events → Message Queue → [Stream Processing + Batch Processing] → [Time Series DB + Data Warehouse]
-```
-
-**Why choose this:**
-- **Flexibility**: Supports both real-time and batch use cases
-- **Optimization**: Right tool for each job
-- **Future-proof**: Can evolve with requirements
-- **Cost-effective**: Optimizes resource usage
-
-**When to use:**
-- Enterprise applications
-- Multi-tenant platforms
-- Evolving requirements
-- Mixed workload patterns
-
-**Alternatives considered:**
-- **Single approach**: Either too slow or too inaccurate
-- **Custom solutions**: Too complex to maintain
-- **Third-party services**: Vendor lock-in risks
-
-**Trade-offs:**
-- ✅ **Flexibility**: Best of both worlds
-- ✅ **Performance**: Optimized for each use case
-- ❌ **Complexity**: Higher operational overhead
-- ❌ **Cost**: Multiple systems to maintain
-
-### Approach 4: Serverless Solution
-
-**Architecture:**
-```
-Events → Event Bridge → Lambda Functions → DynamoDB/CloudWatch → API Gateway
-```
-
-**Why choose this:**
-- **Zero maintenance**: No infrastructure management
-- **Auto-scaling**: Handles traffic spikes automatically
-- **Cost-effective**: Pay only for usage
-- **Fast deployment**: Quick to implement
-
-**When to use:**
-- Startups and MVPs
-- Variable workloads
-- Limited DevOps resources
-- Rapid prototyping
-
-**Alternatives considered:**
-- **Containerized services**: More control but higher maintenance
-- **Managed services**: Better for predictable workloads
-- **On-premises**: Higher upfront costs
-
-**Trade-offs:**
-- ✅ **Simplicity**: Minimal operational overhead
-- ✅ **Scalability**: Automatic scaling
-- ❌ **Vendor lock-in**: Platform dependency
-- ❌ **Cost**: Can be expensive at scale
-
-## Detailed System Design
-
-### High-Level Architecture
-
-```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Event Sources │    │   Load Balancer │    │   API Gateway   │
-│   (Web, Mobile) │───▶│                 │───▶│                 │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-                                                         │
-                                                         ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                        Kafka Cluster                            │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐             │
-│  │ Partition 1 │  │ Partition 2 │  │ Partition N │             │
-│  └─────────────┘  └─────────────┘  └─────────────┘             │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                    ┌───────────┼───────────┐
-                    ▼           ▼           ▼
-        ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐
-        │ Spark Streaming │ │ Count-Min Sketch│ │   Batch Jobs    │
-        │   (Exact)       │ │  (Approximate)  │ │   (Historical)  │
-        └─────────────────┘ └─────────────────┘ └─────────────────┘
-                    │           │           │
-                    ▼           ▼           ▼
-        ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐
-        │   Time Series   │ │   Time Series   │ │      HDFS       │
-        │      DB         │ │      DB         │ │   (Parquet)     │
-        └─────────────────┘ └─────────────────┘ └─────────────────┘
-                    │           │           │
-                    └───────────┼───────────┘
-                                ▼
-                    ┌─────────────────┐
-                    │ Leaderboard     │
-                    │ Service         │
-                    └─────────────────┘
-```
-
-### Component Details
-
-#### 1. Event Ingestion Layer
-
-**Kafka Configuration:**
-```yaml
-topics:
-  - name: "events"
-    partitions: 100
-    replication-factor: 3
-    retention: 7 days
-    
-partitioning-strategy: "eventId.hash() % partitions"
-```
-
-**Event Schema:**
-```json
-{
-  "eventId": "string",
-  "eventType": "string", 
-  "timestamp": "long",
-  "userId": "string",
-  "sessionId": "string",
-  "metadata": "map<string,string>"
-}
-```
-
-#### 2. Stream Processing Layer
-
-**Why Stream Processing:**
-- **Real-time aggregation**: Process events as they arrive
-- **Scalability**: Handle millions of events per second
-- **Fault tolerance**: Built-in checkpointing and recovery
-- **Windowing**: Natural support for time-based aggregations
-
-**Technology Choices:**
-- **Apache Kafka**: High-throughput message queuing
-- **Apache Flink**: Low-latency stream processing
-- **Apache Spark Streaming**: Batch-like processing with micro-batches
-
-**Alternatives considered:**
-- **Apache Storm**: Lower-level, more complex
-- **Apache Samza**: Tied to Kafka ecosystem
-- **AWS Kinesis**: Vendor lock-in concerns
-
-**Processing Strategy:**
-```
-Events → Windowing → Aggregation → Top-K Selection → Storage
-```
-
-#### 3. Count-Min Sketch Algorithm
-
-**Why Count-Min Sketch:**
-- **Memory efficient**: Fixed memory footprint
-- **Fast updates**: O(1) insertion time
-- **Approximate accuracy**: 95-99% accuracy with proper tuning
-- **Scalable**: Works with billions of unique items
-
-**Algorithm Overview:**
-1. **Hash Functions**: Multiple independent hash functions
-2. **Buckets**: Each hash function maps to different buckets
-3. **Increment**: Increment counters in all mapped buckets
-4. **Estimation**: Take minimum count across all buckets
-
-**Alternatives considered:**
-- **HyperLogLog**: Only for cardinality, not counts
-- **Bloom Filter**: Only for membership, not counts
-- **Exact counting**: Too memory-intensive at scale
-
-**Trade-offs:**
-- ✅ **Memory**: Constant memory usage
-- ✅ **Speed**: Very fast updates and queries
-- ❌ **Accuracy**: Approximate results only
-- ❌ **Tuning**: Requires careful parameter selection
-
-#### 4. Time Series Database
-
-**Why Time Series Database:**
-- **Optimized for time-based queries**: Efficient range queries
-- **Compression**: Automatic data compression over time
-- **Retention policies**: Automatic data lifecycle management
-- **Aggregation**: Built-in time-based aggregation functions
-
-**Technology Choices:**
-- **InfluxDB**: High-performance time series database
-- **TimescaleDB**: PostgreSQL extension for time series
-- **ClickHouse**: Columnar database optimized for analytics
-
-**Alternatives considered:**
-- **PostgreSQL**: Not optimized for time series workloads
-- **MongoDB**: Document-based, not ideal for time series
-- **Redis**: In-memory, not suitable for historical data
-
-**Query Patterns:**
-- **Time range queries**: Most common pattern
-- **Aggregation queries**: SUM, COUNT, AVG over time windows
-- **Top-K queries**: Ranking within time ranges
-
-## Database Schema Design
-
-### 1. Raw Events Table (HDFS/Parquet)
-
-```sql
-CREATE TABLE raw_events (
-    event_id STRING,
-    event_type STRING,
-    timestamp BIGINT,
-    user_id STRING,
-    session_id STRING,
-    metadata MAP<STRING, STRING>,
-    partition_date STRING
-) 
-PARTITIONED BY (partition_date)
-STORED AS PARQUET
-LOCATION 'hdfs://cluster/raw_events/'
-```
-
-**Partitioning Strategy:**
-- Partition by date: `YYYY-MM-DD`
-- Sub-partition by hour: `YYYY-MM-DD-HH`
-- Benefits: Efficient time-range queries, parallel processing
-
-**Indexes:**
-```sql
--- Event ID index for exact lookups
-CREATE INDEX idx_event_id ON raw_events(event_id);
-
--- Composite index for time-range queries
-CREATE INDEX idx_time_event ON raw_events(timestamp, event_id);
-
--- Event type index for filtering
-CREATE INDEX idx_event_type ON raw_events(event_type);
-```
-
-### 2. Aggregated Counts Table (Time Series DB)
-
-```sql
-CREATE TABLE event_counts (
-    time TIMESTAMP,
-    event_type STRING,
-    event_id STRING,
-    count BIGINT,
-    rank INT,
-    window_size STRING
-) 
-PRIMARY KEY (time, event_type, event_id)
-```
-
-**Indexes:**
-```sql
--- Time-based queries
-CREATE INDEX idx_time ON event_counts(time);
-
--- Event type filtering
-CREATE INDEX idx_event_type ON event_counts(event_type);
-
--- Count-based sorting
-CREATE INDEX idx_count ON event_counts(count DESC);
-```
-
-### 3. Top-K Cache Table (Redis)
-
-```redis
-# Key pattern: topk:{eventType}:{timeWindow}:{k}
-SET topk:song_play:last_hour:10 '{"results":[...]}' EX 3600
-
-# Key pattern: count:{eventId}:{timeWindow}
-SET count:song_123:last_hour 1500000 EX 3600
-```
-
-### 4. Metadata Tables
-
-```sql
-CREATE TABLE event_types (
-    event_type STRING PRIMARY KEY,
-    description STRING,
-    retention_days INT,
-    aggregation_window INT
-);
-
-CREATE TABLE system_metrics (
-    timestamp TIMESTAMP,
-    metric_name STRING,
-    metric_value DOUBLE,
-    tags MAP<STRING, STRING>
-);
-```
-
-## Performance Optimizations
-
-### 1. Caching Strategy
-
-**Why Multi-Level Caching:**
-- **L1 Cache (Local)**: Fastest access, limited capacity
-- **L2 Cache (Distributed)**: Shared across instances, larger capacity
-- **L3 Cache (Database)**: Persistent storage, unlimited capacity
-
-**Cache Invalidation Strategies:**
-- **TTL-based**: Automatic expiration after time period
-- **Event-based**: Invalidate when underlying data changes
-- **Manual**: Administrative control for critical updates
-
-**Alternatives considered:**
-- **Single-level caching**: Either too slow or too limited
-- **Write-through caching**: Higher write latency
-- **Write-behind caching**: Risk of data loss
-
-### 2. Connection Pooling
-
-**Why Connection Pooling:**
-- **Resource efficiency**: Reuse expensive database connections
-- **Performance**: Avoid connection establishment overhead
-- **Scalability**: Handle concurrent requests efficiently
-
-**Pool Configuration:**
-- **Maximum pool size**: Based on database connection limits
-- **Minimum idle connections**: Maintain warm connections
-- **Connection timeout**: Prevent hanging connections
-- **Idle timeout**: Clean up unused connections
-
-**Alternatives considered:**
-- **Connection per request**: Too expensive at scale
-- **Single connection**: Bottleneck for concurrent requests
-- **Connectionless**: Not suitable for transactional workloads
-
-### 3. Async Processing
-
-**Why Async Processing:**
-- **Non-blocking**: Don't wait for slow operations
-- **Resource utilization**: Better CPU and I/O utilization
-- **Scalability**: Handle more concurrent requests
-
-**Processing Patterns:**
-- **Fire-and-forget**: For non-critical operations
-- **Callback-based**: For operations requiring results
-- **Promise-based**: For complex async workflows
-
-**Alternatives considered:**
-- **Synchronous processing**: Blocking and slow
-- **Thread-per-request**: Resource intensive
-- **Event loops**: Complex to implement correctly
-
-## Monitoring and Observability
-
-### 1. Metrics Collection Strategy
-
-**Why Comprehensive Metrics:**
-- **Performance monitoring**: Track system performance in real-time
-- **Capacity planning**: Understand resource usage patterns
-- **Troubleshooting**: Quickly identify and resolve issues
-- **Business insights**: Understand user behavior and system usage
-
-**Key Metrics Categories:**
-- **Application metrics**: Request rates, response times, error rates
-- **Infrastructure metrics**: CPU, memory, disk, network usage
-- **Business metrics**: Event counts, top-K accuracy, user engagement
-- **Custom metrics**: Domain-specific measurements
-
-**Alternatives considered:**
-- **Log-based monitoring**: Too slow for real-time alerts
-- **Sampling**: May miss critical events
-- **Manual monitoring**: Not scalable for large systems
-
-### 2. Logging Strategy
-
-**Why Structured Logging:**
-- **Searchability**: Easy to find specific events
-- **Correlation**: Track requests across multiple services
-- **Analysis**: Automated log analysis and insights
-- **Compliance**: Meet audit and regulatory requirements
-
-**Log Levels and Usage:**
-- **ERROR**: System errors requiring immediate attention
-- **WARN**: Potential issues that need monitoring
-- **INFO**: Important business events and state changes
-- **DEBUG**: Detailed information for troubleshooting
-
-**Alternatives considered:**
-- **Unstructured logging**: Difficult to analyze
-- **Console-only logging**: Not suitable for production
-- **File-based logging**: Limited scalability
-
-### 3. Alerting Strategy
-
-**Why Proactive Alerting:**
-- **Early detection**: Catch issues before they impact users
-- **Automated response**: Trigger automatic recovery actions
-- **Escalation**: Ensure critical issues get proper attention
-- **Learning**: Improve system reliability over time
-
-**Alert Types:**
-- **Threshold-based**: Alert when metrics exceed limits
-- **Anomaly detection**: Alert on unusual patterns
-- **Composite alerts**: Alert based on multiple conditions
-- **Business alerts**: Alert on business-critical events
-
-**Alternatives considered:**
-- **Reactive monitoring**: Too late to prevent issues
-- **Manual monitoring**: Not scalable for 24/7 operations
-- **Over-alerting**: Alert fatigue reduces effectiveness
-
-## System Architecture Diagrams
-
-### 1. High-Level System Architecture
+**Processing Power:**
+- Spark Streaming: 100 CPU cores
+- Kafka brokers: 20 CPU cores
+- API servers: 50 CPU cores
+- Database servers: 30 CPU cores
+
+**Memory Requirements:**
+- Spark executors: 500GB total
+- Kafka brokers: 200GB total
+- Redis cache: 100GB total
+- Database buffers: 50GB total
+
+## System Architecture
 
 ```mermaid
 graph TB
     subgraph "Client Layer"
-        WEB[Web Applications]
-        MOBILE[Mobile Apps]
-        API_CLIENT[API Clients]
+        C1[Client App 1]
+        C2[Client App 2]
+        C3[Client App 3]
     end
     
-    subgraph "Load Balancing & API Gateway"
+    subgraph "Load Balancing"
         LB[Load Balancer]
-        API_GW[API Gateway]
     end
     
-    subgraph "Event Ingestion"
-        EVENT_SERVICE[Event Service]
-        KAFKA[Kafka Cluster]
+    subgraph "API Gateway"
+        AG[API Gateway]
     end
     
-    subgraph "Processing Layer"
-        SPARK[Spark Streaming]
+    subgraph "Leaderboard Service"
+        QA[Query API]
+        UA[Update API]
+        AA[Admin API]
+    end
+    
+    subgraph "Cache Layer"
+        R1[Redis Cluster 1]
+        R2[Redis Cluster 2]
+        R3[Redis Cluster 3]
+    end
+    
+    subgraph "Data Processing"
+        KS[Kafka Streams]
+        SS[Spark Streaming]
         CMS[Count-Min Sketch]
-        BATCH[Batch Processor]
     end
     
     subgraph "Storage Layer"
-        TSDB[Time Series DB]
-        HDFS[HDFS/Parquet]
-        REDIS[Redis Cache]
+        PG[PostgreSQL<br/>Metadata]
+        HDFS[HDFS<br/>Raw Data]
+        TS[Time Series DB]
     end
     
-    subgraph "Query Layer"
-        LEADERBOARD[Leaderboard Service]
-        CACHE[Caching Service]
-    end
-    
-    WEB --> LB
-    MOBILE --> LB
-    API_CLIENT --> LB
-    LB --> API_GW
-    API_GW --> EVENT_SERVICE
-    EVENT_SERVICE --> KAFKA
-    
-    KAFKA --> SPARK
-    KAFKA --> CMS
-    KAFKA --> BATCH
-    
-    SPARK --> TSDB
-    CMS --> TSDB
-    BATCH --> HDFS
-    
-    TSDB --> LEADERBOARD
-    HDFS --> LEADERBOARD
-    REDIS --> CACHE
-    CACHE --> LEADERBOARD
-    
-    LEADERBOARD --> API_GW
+    C1 --> LB
+    C2 --> LB
+    C3 --> LB
+    LB --> AG
+    AG --> QA
+    AG --> UA
+    AG --> AA
+    QA --> R1
+    UA --> R2
+    AA --> R3
+    R1 --> KS
+    R2 --> SS
+    R3 --> CMS
+    KS --> PG
+    SS --> HDFS
+    CMS --> TS
 ```
 
-### 2. Data Flow Architecture
+## Data Flow Architecture
 
 ```mermaid
-sequenceDiagram
-    participant Client
-    participant API
-    participant Kafka
-    participant Spark
-    participant CMS
-    participant TSDB
-    participant HDFS
-    participant Leaderboard
+graph TD
+    ES[Events Stream] --> KP[Kafka Partitions<br/>1, 2, ..., N]
     
-    Client->>API: POST /events
-    API->>Kafka: Publish Event
-    Kafka-->>API: ACK
-    API-->>Client: 200 OK
+    KP --> SSW[Spark Streaming Windows]
+    SSW --> W1[1 minute]
+    SSW --> W5[5 minutes]
+    SSW --> WH[1 hour]
     
-    Note over Kafka: Event Partitioning by EventID
+    W1 --> CMS[Count-Min Sketch]
+    W5 --> CMS
+    WH --> CMS
     
-    Kafka->>Spark: Stream Events
-    Kafka->>CMS: Stream Events
+    CMS --> HF1[Hash Function 1]
+    CMS --> HF2[Hash Function 2]
+    CMS --> HFD[Hash Function D]
     
-    Spark->>TSDB: Hourly Top-K
-    CMS->>TSDB: Approximate Counts
+    HF1 --> TK[Top-K Calculation]
+    HF2 --> TK
+    HFD --> TK
     
-    Spark->>HDFS: Raw Events (Parquet)
+    TK --> MH10[MinHeap Top 10]
+    TK --> MH50[MinHeap Top 50]
+    TK --> MH100[MinHeap Top 100]
     
-    Client->>Leaderboard: GET /leaderboard
-    Leaderboard->>TSDB: Query Top-K
-    TSDB-->>Leaderboard: Results
-    Leaderboard-->>Client: Top-K Response
+    MH10 --> SC[Storage & Cache]
+    MH50 --> SC
+    MH100 --> SC
+    
+    SC --> REDIS[Redis Cache]
+    SC --> HDFS[HDFS Archive]
+    SC --> TS[Time Series Query]
 ```
 
-### 3. Detailed Processing Architecture
+## Detailed Processing Architecture
 
 ```mermaid
-graph TB
-    subgraph "Kafka Topics"
-        EVENTS[events topic<br/>100 partitions]
-        LOCAL_TOPK[local-topk topic]
-        GLOBAL_TOPK[global-topk topic]
-    end
+graph TD
+    EI[Event Ingestion] --> KT[Kafka Topics]
     
-    subgraph "Spark Streaming Cluster"
-        SPARK1[Spark Node 1<br/>Partition 1-25]
-        SPARK2[Spark Node 2<br/>Partition 26-50]
-        SPARK3[Spark Node 3<br/>Partition 51-75]
-        SPARK4[Spark Node 4<br/>Partition 76-100]
-    end
+    KT --> ET[events]
+    KT --> MT[metadata]
+    KT --> AT[alerts]
     
-    subgraph "Count-Min Sketch Servers"
-        CMS1[CMS Server 1<br/>Primary]
-        CMS2[CMS Server 2<br/>Replica]
-    end
+    ET --> SSJ[Spark Streaming Jobs]
+    MT --> SSJ
+    AT --> SSJ
     
-    subgraph "Aggregation Layer"
-        FLINK[Flink Aggregator]
-        ZOOKEEPER[Zookeeper<br/>Coordination]
-    end
+    SSJ --> J1[Job 1:<br/>Real-time Processing]
+    SSJ --> J2[Job 2:<br/>Batch Processing]
+    SSJ --> J3[Job 3:<br/>Historical Processing]
     
-    subgraph "Storage Systems"
-        INFLUX[InfluxDB<br/>Time Series]
-        HDFS_STORE[HDFS<br/>Parquet Files]
-    end
+    J1 --> DPP[Data Processing Pipeline]
+    J2 --> DPP
+    J3 --> DPP
     
-    EVENTS --> SPARK1
-    EVENTS --> SPARK2
-    EVENTS --> SPARK3
-    EVENTS --> SPARK4
-    EVENTS --> CMS1
-    EVENTS --> CMS2
+    DPP --> FE[Filter Events]
+    DPP --> CMS[Count-Min Sketch]
+    DPP --> TKS[Top-K Selection]
     
-    SPARK1 --> LOCAL_TOPK
-    SPARK2 --> LOCAL_TOPK
-    SPARK3 --> LOCAL_TOPK
-    SPARK4 --> LOCAL_TOPK
+    FE --> OP[Output Processing]
+    CMS --> OP
+    TKS --> OP
     
-    SPARK1 --> HDFS_STORE
-    SPARK2 --> HDFS_STORE
-    SPARK3 --> HDFS_STORE
-    SPARK4 --> HDFS_STORE
-    
-    LOCAL_TOPK --> FLINK
-    CMS1 --> INFLUX
-    CMS2 --> INFLUX
-    
-    FLINK --> ZOOKEEPER
-    FLINK --> GLOBAL_TOPK
-    GLOBAL_TOPK --> INFLUX
+    OP --> CU[Cache Update]
+    OP --> DU[Database Update]
+    OP --> AT2[Alert Trigger]
 ```
 
-### 4. Database Schema Relationships
+## Database Schema
 
 ```mermaid
 erDiagram
-    RAW_EVENTS {
+    EVENTS {
         string event_id PK
         string event_type
         bigint timestamp
         string user_id
         string session_id
-        map metadata
-        string partition_date
+        json metadata
     }
     
-    EVENT_COUNTS {
-        timestamp time PK
+    LEADERBOARD {
+        int id PK
+        string event_type
+        string time_window
+        int k_value
+        json rankings
+        timestamp created_at
+    }
+    
+    METADATA {
         string event_type PK
-        string event_id PK
-        bigint count
-        int rank
-        string window_size
+        text description
+        json schema
+        int retention
+        timestamp created_at
+        timestamp updated_at
     }
     
-    EVENT_TYPES {
-        string event_type PK
-        string description
-        int retention_days
-        int aggregation_window
-    }
-    
-    SYSTEM_METRICS {
-        timestamp timestamp PK
-        string metric_name PK
-        double metric_value
-        map tags
-    }
-    
-    RAW_EVENTS ||--o{ EVENT_COUNTS : aggregates_to
-    EVENT_TYPES ||--o{ RAW_EVENTS : categorizes
-    EVENT_TYPES ||--o{ EVENT_COUNTS : defines_type
+    EVENTS ||--o{ LEADERBOARD : "generates"
+    METADATA ||--o{ EVENTS : "defines"
+    METADATA ||--o{ LEADERBOARD : "configures"
 ```
 
-### 5. Caching Strategy Architecture
+### Schema Details
+
+#### Events Table
+```sql
+CREATE TABLE events (
+    event_id VARCHAR(36) PRIMARY KEY,
+    event_type VARCHAR(50) NOT NULL,
+    timestamp BIGINT NOT NULL,
+    user_id VARCHAR(50),
+    session_id VARCHAR(50),
+    metadata JSONB,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Indexes
+CREATE INDEX idx_events_type_timestamp ON events(event_type, timestamp);
+CREATE INDEX idx_events_user_id ON events(user_id);
+CREATE INDEX idx_events_session_id ON events(session_id);
+CREATE INDEX idx_events_created_at ON events(created_at);
+```
+
+#### Leaderboard Table
+```sql
+CREATE TABLE leaderboard (
+    id SERIAL PRIMARY KEY,
+    event_type VARCHAR(50) NOT NULL,
+    time_window VARCHAR(20) NOT NULL,
+    k_value INTEGER NOT NULL,
+    rankings JSONB NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Indexes
+CREATE INDEX idx_leaderboard_type_window ON leaderboard(event_type, time_window);
+CREATE INDEX idx_leaderboard_created_at ON leaderboard(created_at);
+```
+
+#### Metadata Table
+```sql
+CREATE TABLE metadata (
+    event_type VARCHAR(50) PRIMARY KEY,
+    description TEXT,
+    schema JSONB,
+    retention INTEGER DEFAULT 30,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+```
+
+### Partitioning Strategy
+
+**Why partitioning:**
+- **Performance**: Faster queries on large datasets
+- **Maintenance**: Easier backup and archival
+- **Scalability**: Distribute load across partitions
+
+**Partitioning approach:**
+- **Time-based partitioning**: Monthly partitions for events table
+- **Hash partitioning**: Distribute leaderboard data by event_type
+- **Range partitioning**: Partition metadata by event_type ranges
+
+## Caching Strategy
 
 ```mermaid
-graph TB
-    subgraph "Client Request Flow"
-        CLIENT[Client Request]
-        LB[Load Balancer]
-        API[API Gateway]
-    end
+graph TD
+    CR[Client Request] --> CL[Cache Lookup]
     
-    subgraph "Caching Layers"
-        L1[L1 Cache<br/>Caffeine<br/>Local Memory]
-        L2[L2 Cache<br/>Redis<br/>Distributed]
-        L3[L3 Cache<br/>Database<br/>Persistent]
-    end
+    CL --> L1[L1 Cache<br/>Local<br/>TTL: 1 min]
+    CL --> L2[L2 Cache<br/>Redis<br/>TTL: 5 min]
+    CL --> L3[L3 Cache<br/>Database<br/>TTL: 1 hour]
     
-    subgraph "Cache Invalidation"
-        TTL[TTL Expiration]
-        EVENT_INVALIDATION[Event-based Invalidation]
-        MANUAL[Manual Invalidation]
-    end
+    L1 -->|Miss| L2
+    L2 -->|Miss| L3
+    L3 -->|Miss| DB[Database Query]
     
-    CLIENT --> LB
-    LB --> API
-    API --> L1
+    L1 -->|Hit| RESP[Response]
+    L2 -->|Hit| RESP
+    L3 -->|Hit| RESP
+    DB --> RESP
     
-    L1 -->|Cache Miss| L2
-    L2 -->|Cache Miss| L3
+    RESP --> CI[Cache Invalidation]
+    CI --> EB[Event Based]
+    CI --> TB[Time Based]
+    CI --> MB[Manual Based]
     
-    L3 -->|Cache Hit| L2
-    L2 -->|Cache Hit| L1
-    L1 -->|Cache Hit| API
+    EB --> CUS[Cache Update Strategy]
+    TB --> CUS
+    MB --> CUS
     
-    TTL --> L1
-    TTL --> L2
-    EVENT_INVALIDATION --> L1
-    EVENT_INVALIDATION --> L2
-    MANUAL --> L1
-    MANUAL --> L2
+    CUS --> WT[Write Through]
+    CUS --> RT[Read Through]
+    CUS --> AU[Async Update]
 ```
 
-### 6. Monitoring and Observability
+### Multi-Level Caching
+
+**L1 Cache (Application Level):**
+- **Technology**: In-memory cache (Caffeine/Guava)
+- **TTL**: 1 minute
+- **Size**: 10,000 entries per instance
+- **Use case**: Frequently accessed leaderboards
+
+**L2 Cache (Distributed):**
+- **Technology**: Redis Cluster
+- **TTL**: 5 minutes
+- **Size**: 100GB total
+- **Use case**: Shared cache across instances
+
+**L3 Cache (Database Level):**
+- **Technology**: PostgreSQL query cache
+- **TTL**: 1 hour
+- **Size**: 50GB
+- **Use case**: Complex query results
+
+### Cache Invalidation Strategies
+
+**Event-Based Invalidation:**
+- Invalidate cache when new events arrive
+- Use Kafka consumer to trigger invalidation
+- Selective invalidation by event type
+
+**Time-Based Invalidation:**
+- TTL-based expiration
+- Different TTLs for different data types
+- Proactive refresh before expiration
+
+**Manual Invalidation:**
+- Admin-triggered cache clear
+- Emergency cache invalidation
+- Selective invalidation by patterns
+
+
+## Count-Min Sketch Deep Dive
 
 ```mermaid
-graph TB
-    subgraph "Application Metrics"
-        APP_METRICS[Application Metrics<br/>Micrometer]
-        CUSTOM_METRICS[Custom Metrics<br/>Business Logic]
-    end
+graph TD
+    EI[Event Input] --> HF[Hash Functions]
     
-    subgraph "Infrastructure Metrics"
-        KAFKA_METRICS[Kafka Metrics<br/>Throughput, Lag]
-        SPARK_METRICS[Spark Metrics<br/>Processing Time]
-        DB_METRICS[Database Metrics<br/>Connections, Queries]
-    end
+    HF --> HF1[Hash Function 1]
+    HF --> HF2[Hash Function 2]
+    HF --> HFD[Hash Function D]
     
-    subgraph "Monitoring Stack"
-        PROMETHEUS[Prometheus<br/>Metrics Collection]
-        GRAFANA[Grafana<br/>Visualization]
-        ALERTMANAGER[AlertManager<br/>Alerting]
-    end
+    HF1 --> A1["Array 1<br/>Counters: 0,0,0,0"]
+    HF2 --> A2["Array 2<br/>Counters: 0,0,0,0"]
+    HFD --> AD["Array D<br/>Counters: 0,0,0,0"]
     
-    subgraph "Logging Stack"
-        LOGS[Application Logs<br/>Structured Logging]
-        ELASTICSEARCH[Elasticsearch<br/>Log Storage]
-        KIBANA[Kibana<br/>Log Analysis]
-    end
+    A1 --> CU[Count Update]
+    A2 --> CU
+    AD --> CU
     
-    subgraph "Tracing"
-        JAEGER[Jaeger<br/>Distributed Tracing]
-        ZIPKIN[Zipkin<br/>Alternative Tracing]
-    end
+    CU --> IC1[Increment Count 1]
+    CU --> IC2[Increment Count 2]
+    CU --> ICD[Increment Count D]
     
-    APP_METRICS --> PROMETHEUS
-    CUSTOM_METRICS --> PROMETHEUS
-    KAFKA_METRICS --> PROMETHEUS
-    SPARK_METRICS --> PROMETHEUS
-    DB_METRICS --> PROMETHEUS
+    IC1 --> TKS[Top-K Selection]
+    IC2 --> TKS
+    ICD --> TKS
     
-    PROMETHEUS --> GRAFANA
-    PROMETHEUS --> ALERTMANAGER
+    TKS --> MC1[Min Count 1]
+    TKS --> MC2[Min Count 2]
+    TKS --> MCD[Min Count D]
     
-    LOGS --> ELASTICSEARCH
-    ELASTICSEARCH --> KIBANA
-    
-    APP_METRICS --> JAEGER
-    CUSTOM_METRICS --> JAEGER
+    MC1 --> RESULT[Final Result]
+    MC2 --> RESULT
+    MCD --> RESULT
 ```
 
-### 7. Deployment Architecture
+### Why Count-Min Sketch?
+
+**Memory Efficiency:**
+- Fixed memory footprint regardless of unique items
+- O(d × w) space complexity where d=hash functions, w=array width
+- Typical usage: 4 hash functions × 16,384 counters = 65KB
+
+**Approximation Guarantees:**
+- Overestimate count with probability 1-δ
+- Error bound: ε × total_count with probability 1-δ
+- Typical parameters: ε=0.01, δ=0.01 (1% error, 99% confidence)
+
+**Performance Benefits:**
+- O(1) update time
+- O(d) query time
+- Cache-friendly memory access pattern
+
+### Implementation Details
+
+**Hash Functions:**
+- Use MurmurHash3 for good distribution
+- Different seeds for each hash function
+- Modulo operation for array indexing
+
+**Array Dimensions:**
+- Width (w): ceil(e/ε) where e=Euler's number
+- Depth (d): ceil(ln(1/δ))
+- Example: ε=0.01, δ=0.01 → w=2,719, d=5
+
+**Update Process:**
+1. Hash event key with each hash function
+2. Increment corresponding counter in each array
+3. Maintain running total for normalization
+
+**Query Process:**
+1. Hash event key with each hash function
+2. Get count from each array
+3. Return minimum count (reduces overestimation)
+
+### Top-K Selection Algorithm
+
+**MinHeap Approach:**
+1. Maintain heap of size K
+2. For each unique key in sketch:
+   - Query count from sketch
+   - If count > heap minimum, replace minimum
+3. Return heap contents as top-K
+
+**Time Complexity:**
+- Update: O(1) per event
+- Top-K query: O(n × log K) where n=unique keys
+- Space: O(K) for heap + O(d×w) for sketch
+
+## Query Processing Flow
 
 ```mermaid
-graph TB
-    subgraph "Production Environment"
-        subgraph "Region 1 - Primary"
-            LB1[Load Balancer]
-            API1[API Gateway Cluster]
-            KAFKA1[Kafka Cluster]
-            SPARK1[Spark Cluster]
-            CMS1[Count-Min Sketch]
-            DB1[Database Cluster]
-        end
-        
-        subgraph "Region 2 - Secondary"
-            LB2[Load Balancer]
-            API2[API Gateway Cluster]
-            KAFKA2[Kafka Cluster]
-            SPARK2[Spark Cluster]
-            CMS2[Count-Min Sketch]
-            DB2[Database Cluster]
-        end
-        
-        subgraph "Shared Services"
-            MONITORING[Monitoring Stack]
-            BACKUP[Backup Services]
-            CDN[CDN]
-        end
-    end
+graph TD
+    CQ[Client Query] --> QP[Query Processing]
     
-    subgraph "Development Environment"
-        DEV_API[Dev API Gateway]
-        DEV_KAFKA[Dev Kafka]
-        DEV_SPARK[Dev Spark]
-        DEV_DB[Dev Database]
-    end
+    QP --> QPAR[Query Parser]
+    QP --> QVAL[Query Validator]
+    QP --> QOPT[Query Optimizer]
     
-    subgraph "Staging Environment"
-        STAGE_API[Stage API Gateway]
-        STAGE_KAFKA[Stage Kafka]
-        STAGE_SPARK[Stage Spark]
-        STAGE_DB[Stage Database]
-    end
+    QPAR --> CL[Cache Lookup]
+    QVAL --> CL
+    QOPT --> CL
     
-    LB1 --> API1
-    LB2 --> API2
+    CL --> L1[L1 Cache Hit?]
+    CL --> L2[L2 Cache Hit?]
+    CL --> L3[L3 Cache Hit?]
     
-    API1 --> KAFKA1
-    API2 --> KAFKA2
+    L1 -->|Yes| RESP[Response]
+    L2 -->|Yes| RESP
+    L3 -->|Yes| RESP
     
-    KAFKA1 --> SPARK1
-    KAFKA2 --> SPARK2
+    L1 -->|No| L2
+    L2 -->|No| L3
+    L3 -->|No| DBQ[Database Query]
     
-    SPARK1 --> DB1
-    SPARK2 --> DB2
+    DBQ --> TF[Time Filter]
+    DBQ --> EF[Event Filter]
+    DBQ --> TKS[Top-K Sort]
     
-    DB1 --> BACKUP
-    DB2 --> BACKUP
+    TF --> RP[Response Processing]
+    EF --> RP
+    TKS --> RP
     
-    MONITORING --> API1
-    MONITORING --> API2
-    MONITORING --> KAFKA1
-    MONITORING --> KAFKA2
+    RP --> FD[Format Data]
+    RP --> CU[Cache Update]
+    RP --> RR[Return Result]
+    
+    FD --> RESP
+    CU --> RESP
+    RR --> RESP
 ```
 
-### 8. Count-Min Sketch Algorithm Flow
+### Query Types
+
+**Real-time Queries:**
+- Current top-K leaderboard
+- Last N minutes/hours
+- Specific event types
+
+**Historical Queries:**
+- Top-K for specific time ranges
+- Trend analysis
+- Comparative analysis
+
+**Analytical Queries:**
+- Event distribution
+- User behavior patterns
+- Performance metrics
+
+### Query Optimization
+
+**Indexing Strategy:**
+- Composite indexes on (event_type, timestamp)
+- Partial indexes for active data
+- Covering indexes for common queries
+
+**Query Rewriting:**
+- Convert subqueries to joins
+- Push down filters
+- Use materialized views for complex aggregations
+
+**Caching Strategy:**
+- Cache query results by pattern
+- Invalidate cache on data updates
+- Use query result compression
+
+## Fault Tolerance & Recovery
 
 ```mermaid
-flowchart TD
-    START[Event Arrives] --> HASH[Hash Event ID<br/>with Multiple Functions]
+graph TD
+    FD[Failure Detection] --> HC[Health Check]
+    FD --> CB[Circuit Breaker]
+    FD --> TM[Timeout Monitor]
     
-    HASH --> BUCKET1[Hash Function 1<br/>→ Bucket 1]
-    HASH --> BUCKET2[Hash Function 2<br/>→ Bucket 2]
-    HASH --> BUCKET3[Hash Function 3<br/>→ Bucket 3]
-    HASH --> BUCKETN[Hash Function N<br/>→ Bucket N]
+    HC --> FC[Failure Classification]
+    CB --> FC
+    TM --> FC
     
-    BUCKET1 --> INCREMENT1[Increment Counter<br/>in Bucket 1]
-    BUCKET2 --> INCREMENT2[Increment Counter<br/>in Bucket 2]
-    BUCKET3 --> INCREMENT3[Increment Counter<br/>in Bucket 3]
-    BUCKETN --> INCREMENTN[Increment Counter<br/>in Bucket N]
+    FC --> TF[Transient Failure]
+    FC --> PF[Permanent Failure]
+    FC --> PARF[Partial Failure]
     
-    INCREMENT1 --> MIN[Find Minimum Count<br/>Across All Buckets]
-    INCREMENT2 --> MIN
-    INCREMENT3 --> MIN
-    INCREMENTN --> MIN
+    TF --> RA[Recovery Actions]
+    PF --> RA
+    PARF --> RA
     
-    MIN --> ESTIMATE[Estimated Count<br/>= Minimum Value]
+    RA --> RL[Retry Logic]
+    RA --> FS[Failover Service]
+    RA --> DS[Degrade Service]
     
-    ESTIMATE --> TOPK[Update Top-K Heap<br/>if Count > Minimum]
+    RL --> MA[Monitoring & Alerting]
+    FS --> MA
+    DS --> MA
     
-    TOPK --> END[End]
+    MA --> MU[Metrics Update]
+    MA --> LA[Logs Analysis]
+    MA --> AT[Alert Trigger]
     
-    style START fill:#e1f5fe
-    style END fill:#c8e6c9
-    style MIN fill:#fff3e0
-    style ESTIMATE fill:#f3e5f5
+    MU --> NOTIF[Notifications]
+    LA --> NOTIF
+    AT --> NOTIF
 ```
 
-### 9. Query Processing Flow
+### Failure Scenarios
+
+**Kafka Broker Failure:**
+- **Impact**: Message loss, processing delay
+- **Recovery**: Automatic failover to replicas
+- **Prevention**: Multi-broker cluster, replication factor 3
+
+**Spark Streaming Failure:**
+- **Impact**: Processing interruption
+- **Recovery**: Automatic restart from checkpoint
+- **Prevention**: Checkpointing, resource monitoring
+
+**Database Failure:**
+- **Impact**: Query failures, data inconsistency
+- **Recovery**: Failover to replica, data repair
+- **Prevention**: Master-slave replication, regular backups
+
+**Cache Failure:**
+- **Impact**: Increased latency, database load
+- **Recovery**: Cache rebuild, traffic rerouting
+- **Prevention**: Redis cluster, multiple cache layers
+
+### Recovery Strategies
+
+**Automatic Recovery:**
+- Health checks every 30 seconds
+- Circuit breakers for external dependencies
+- Automatic service restart with exponential backoff
+
+**Manual Recovery:**
+- Admin dashboard for service management
+- Data repair tools for consistency issues
+- Emergency procedures for critical failures
+
+**Data Recovery:**
+- Point-in-time recovery from backups
+- Kafka replay for message reprocessing
+- Cache warming for performance restoration
+
+
+
+## Production-Level Considerations
+
+### Hotspot Mitigation
+
+**The Problem:**
+With eventId partitioning in Kafka, a globally viral song/video could create a hotspot where one partition receives 10x more traffic than others, becoming a bottleneck.
+
+**Mitigation Strategy - Key Splitting:**
+```mermaid
+graph TD
+    VIRAL[Viral Event<br/>song_123] --> KS[Key Splitting]
+    
+    KS --> K1[song_123#1]
+    KS --> K2[song_123#2]
+    KS --> K3[song_123#3]
+    KS --> KN[song_123#N]
+    
+    K1 --> P1[Partition 1]
+    K2 --> P2[Partition 2]
+    K3 --> P3[Partition 3]
+    KN --> PN[Partition N]
+    
+    P1 --> AG[Aggregation Layer]
+    P2 --> AG
+    P3 --> AG
+    PN --> AG
+    
+    AG --> MERGE[Merge Results]
+    MERGE --> FINAL[Final Count]
+```
+
+**Implementation:**
+- **Dynamic Sharding**: Monitor partition load, split hot keys when threshold exceeded
+- **Consistent Hashing**: Distribute shards across partitions evenly
+- **Downstream Aggregation**: Merge sharded results in Spark Streaming
+- **Fallback Strategy**: If aggregation fails, use original key
+
+### Query Flexibility & Dual-Path Architecture
+
+**The Challenge:**
+Arbitrary time ranges (e.g., "Top songs from Jan-Mar 2024") require merging multiple windows efficiently without scanning billions of raw events.
+
+**Dual-Path Query Design:**
+```mermaid
+graph TD
+    QUERY[Client Query] --> QP[Query Parser]
+    
+    QP --> FAST{Standard Query?}
+    FAST -->|Yes| REDIS[Redis Cache<br/>Pre-computed]
+    FAST -->|No| SLOW[Slow Path]
+    
+    REDIS --> RESPONSE[Response]
+    
+    SLOW --> TSDB[Time Series DB]
+    SLOW --> HDFS[HDFS + Presto]
+    
+    TSDB --> MERGE[Merge Aggregates]
+    HDFS --> MERGE
+    
+    MERGE --> CACHE[Update Cache]
+    CACHE --> RESPONSE
+    
+    RESPONSE --> CLIENT[Client]
+```
+
+**Pre-aggregation Strategy:**
+- **Multiple Granularities**: Minute, hour, day, week, month
+- **Rollup Tables**: Pre-compute common time ranges
+- **Materialized Views**: Cache expensive aggregations
+- **Query Routing**: Route to appropriate granularity
+
+### Multi-Tenancy & Isolation
+
+**Tenant Isolation:**
+- **Data Partitioning**: Separate Kafka topics per tenant
+- **Resource Quotas**: CPU, memory, storage limits per tenant
+- **Rate Limiting**: API calls per tenant per minute
+- **Security**: Tenant-specific authentication and authorization
+
+**Query Isolation:**
+- **Dedicated Resources**: Separate Spark jobs per tenant
+- **Cache Namespacing**: Redis keys prefixed with tenant ID
+- **Database Schemas**: Separate schemas or row-level security
+
+### Incremental Cache Updates
+
+**Problem with Full Invalidation:**
+Complete cache invalidation causes thundering herd and temporary performance degradation.
+
+**Incremental Update Strategy:**
+```mermaid
+graph TD
+    EVENT[New Event] --> CMS[Count-Min Sketch]
+    
+    CMS --> CHANGE[Detect Changes]
+    CHANGE --> INCR[Incremental Update]
+    
+    INCR --> REDIS[Update Redis]
+    INCR --> TSDB[Update TSDB]
+    
+    REDIS --> NOTIFY[Cache Notification]
+    NOTIFY --> CLIENT[Client Updates]
+    
+    TSDB --> BACKUP[Backup Storage]
+```
+
+**Implementation:**
+- **Delta Updates**: Only update changed items in cache
+- **Event-Driven**: Use Kafka events to trigger cache updates
+- **Batch Processing**: Group updates to reduce cache operations
+- **Conflict Resolution**: Handle concurrent updates gracefully
+
+## Advanced Algorithms & Optimizations
+
+### Heavy Hitters Algorithms
+
+**Beyond Count-Min Sketch:**
+While CMS is excellent for frequency estimation, combining it with streaming algorithms provides more stable top-K results.
+
+**Space-Saving Algorithm:**
+```mermaid
+graph TD
+    STREAM[Event Stream] --> SS[Space-Saving]
+    
+    SS --> MONITOR[Monitor Counters]
+    MONITOR --> FULL{Counters Full?}
+    
+    FULL -->|No| ADD[Add New Counter]
+    FULL -->|Yes| REPLACE[Replace Min Counter]
+    
+    ADD --> UPDATE[Update Counts]
+    REPLACE --> UPDATE
+    
+    UPDATE --> TOPK[Top-K Selection]
+    TOPK --> RESULT[Stable Rankings]
+```
+
+**Misra-Gries Algorithm:**
+- **Guaranteed Accuracy**: For top-K with K counters, error ≤ N/(K+1)
+- **Memory Efficient**: O(K) space complexity
+- **Deterministic**: No probabilistic guarantees needed
+
+**Hybrid Approach:**
+- **CMS**: For frequency estimation of all items
+- **Space-Saving**: For maintaining top-K candidates
+- **Combination**: Use CMS to validate Space-Saving results
+
+### Sliding Windows & Decay
+
+**Exponential Histograms:**
+For sliding windows where recent events matter more than old ones.
 
 ```mermaid
-flowchart TD
-    QUERY[Top-K Query Request] --> VALIDATE[Validate Request<br/>Parameters]
+graph TD
+    WINDOW[Sliding Window] --> EH[Exponential Histogram]
     
-    VALIDATE --> CACHE_CHECK{Check Cache<br/>L1 → L2 → L3}
+    EH --> BUCKETS[Time Buckets]
+    BUCKETS --> B1[Recent: Weight 1.0]
+    BUCKETS --> B2[Older: Weight 0.5]
+    BUCKETS --> B3[Oldest: Weight 0.25]
     
-    CACHE_CHECK -->|Cache Hit| RETURN_CACHE[Return Cached<br/>Results]
+    B1 --> WEIGHT[Weighted Count]
+    B2 --> WEIGHT
+    B3 --> WEIGHT
     
-    CACHE_CHECK -->|Cache Miss| APPROX_CHECK{Can Use<br/>Approximate?}
-    
-    APPROX_CHECK -->|Yes| TSDB_QUERY[Query Time Series<br/>Database]
-    APPROX_CHECK -->|No| BATCH_TRIGGER[Trigger Batch<br/>Processing Job]
-    
-    TSDB_QUERY --> AGGREGATE[Aggregate Results<br/>Across Time Windows]
-    
-    AGGREGATE --> HEAP[Build Min-Heap<br/>for Top-K]
-    
-    HEAP --> CACHE_STORE[Store in Cache<br/>with TTL]
-    
-    CACHE_STORE --> RETURN_APPROX[Return Approximate<br/>Results]
-    
-    BATCH_TRIGGER --> POLL[Poll for Job<br/>Completion]
-    
-    POLL -->|Complete| RETURN_EXACT[Return Exact<br/>Results]
-    
-    POLL -->|Timeout| ERROR[Return Error<br/>or Partial Results]
-    
-    RETURN_CACHE --> END[End]
-    RETURN_APPROX --> END
-    RETURN_EXACT --> END
-    ERROR --> END
-    
-    style QUERY fill:#e1f5fe
-    style END fill:#c8e6c9
-    style APPROX_CHECK fill:#fff3e0
-    style CACHE_CHECK fill:#f3e5f5
+    WEIGHT --> TOPK[Top-K with Decay]
 ```
 
-### 10. Failure Handling and Recovery
+**Damped Weighted Counts:**
+- **Decay Factor**: λ = 0.9 (configurable)
+- **Update Rule**: count = λ × old_count + new_weight
+- **Benefits**: Naturally handles concept drift
+
+### Ranking Stability
+
+**The Problem:**
+Frequent changes in top-K rankings create poor user experience.
+
+**Stability Mechanisms:**
+- **Hysteresis**: Require significant change to update ranking
+- **Smoothing**: Use moving averages for counts
+- **Confidence Intervals**: Only show rankings with high confidence
+- **Temporal Consistency**: Ensure rankings don't change too rapidly
+
+## Data Lifecycle & Storage Tiers
+
+### Multi-Tier Storage Strategy
 
 ```mermaid
-graph TB
-    subgraph "Failure Detection"
-        HEALTH_CHECK[Health Checks]
-        METRICS_MONITOR[Metrics Monitoring]
-        ALERT_SYSTEM[Alert System]
-    end
+graph TD
+    HOT[Hot Data<br/>Last 24 hours] --> WARM[Warm Data<br/>Last 30 days]
+    WARM --> COLD[Cold Data<br/>Last 1 year]
+    COLD --> ARCHIVE[Archive Data<br/>Older than 1 year]
     
-    subgraph "Failure Types"
-        NODE_FAILURE[Node Failure]
-        NETWORK_FAILURE[Network Failure]
-        DB_FAILURE[Database Failure]
-        PARTITION_FAILURE[Partition Failure]
-    end
-    
-    subgraph "Recovery Mechanisms"
-        AUTO_RECOVERY[Auto Recovery]
-        FAILOVER[Failover to Replica]
-        CIRCUIT_BREAKER[Circuit Breaker]
-        RETRY_MECHANISM[Retry Mechanism]
-    end
-    
-    subgraph "Data Consistency"
-        REPLICATION[Data Replication]
-        CHECKPOINTING[Checkpointing]
-        BACKUP_RESTORE[Backup & Restore]
-    end
-    
-    HEALTH_CHECK --> NODE_FAILURE
-    METRICS_MONITOR --> NETWORK_FAILURE
-    ALERT_SYSTEM --> DB_FAILURE
-    
-    NODE_FAILURE --> AUTO_RECOVERY
-    NETWORK_FAILURE --> CIRCUIT_BREAKER
-    DB_FAILURE --> FAILOVER
-    PARTITION_FAILURE --> RETRY_MECHANISM
-    
-    AUTO_RECOVERY --> REPLICATION
-    FAILOVER --> CHECKPOINTING
-    CIRCUIT_BREAKER --> BACKUP_RESTORE
-    RETRY_MECHANISM --> REPLICATION
+    HOT --> REDIS[Redis Cache<br/>Sub-second access]
+    WARM --> TSDB[Time Series DB<br/>Second-level access]
+    COLD --> HDFS[HDFS + Presto<br/>Minute-level access]
+    ARCHIVE --> S3[S3 + Athena<br/>Hour-level access]
 ```
+
+### Storage Cost Optimization
+
+**Cost Analysis (per TB per month):**
+- **Redis**: $200-400 (memory-based)
+- **Time Series DB**: $50-100 (SSD storage)
+- **HDFS**: $20-40 (HDD storage)
+- **S3 Standard**: $23 (object storage)
+- **S3 Glacier**: $4 (archival storage)
+
+**Lifecycle Policies:**
+- **Hot → Warm**: After 24 hours
+- **Warm → Cold**: After 30 days
+- **Cold → Archive**: After 1 year
+- **Archive → Delete**: After 7 years (compliance)
+
+### Query Performance Optimization
+
+**Query Routing Strategy:**
+```mermaid
+graph TD
+    QUERY[Query Request] --> ANALYZE[Analyze Query]
+    
+    ANALYZE --> RECENT{Recent Data?}
+    RECENT -->|Yes| REDIS[Redis Path<br/>< 100ms]
+    RECENT -->|No| HISTORICAL{Historical Data?}
+    
+    HISTORICAL -->|Yes| TSDB[TSDB Path<br/>< 1s]
+    HISTORICAL -->|No| BATCH[Batch Path<br/>< 1min]
+    
+    REDIS --> RESPONSE[Response]
+    TSDB --> RESPONSE
+    BATCH --> RESPONSE
+```
+
+**Precomputation Strategy:**
+- **Common Queries**: Pre-compute top-K for popular time ranges
+- **Materialized Views**: Cache expensive aggregations
+- **Rollup Tables**: Store data at multiple granularities
+- **Predictive Caching**: Pre-load likely queries
+
+### Data Compression & Retention
+
+**Compression Techniques:**
+- **Parquet**: Columnar format with 80-90% compression
+- **Snappy**: Fast compression for real-time data
+- **LZ4**: High-speed compression for cache data
+- **Gzip**: Maximum compression for archival data
+
+**Retention Policies:**
+- **Real-time**: 24 hours (Redis)
+- **Recent**: 30 days (Time Series DB)
+- **Historical**: 1 year (HDFS)
+- **Archive**: 7 years (S3 Glacier)
+- **Compliance**: Indefinite (encrypted S3)
+
+## Design Decisions & Trade-offs
+
+### Consistency Models
+
+**Eventual Consistency (Recommended):**
+- **Why**: Global strong consistency is extremely difficult and expensive
+- **Implementation**: Each region maintains its own leaderboard, sync periodically
+- **Trade-off**: Users might see slightly different rankings across regions
+- **Mitigation**: Use timestamps and conflict resolution for critical updates
+
+**Strong Consistency (If Required):**
+- **Implementation**: Distributed consensus (Raft/Paxos) across regions
+- **Cost**: 10x higher latency, complex failure handling
+- **Use Case**: Financial transactions, critical business metrics
+
+### Approximation Error Tolerance
+
+**Typical Tolerance Levels:**
+- **User-facing dashboards**: 1-2% error acceptable
+- **Business analytics**: 5% error acceptable  
+- **Internal monitoring**: 10% error acceptable
+
+**Error Sources:**
+- **Count-Min Sketch**: Overestimation by ε × total_count
+- **Sampling**: If using sampling for very high volume
+- **Network partitions**: Temporary inconsistencies
+
+**Mitigation Strategies:**
+- **Confidence intervals**: Report error bounds to users
+- **Validation**: Cross-check with exact counts periodically
+- **Fallback**: Use exact computation for critical queries
+
+### Query Latency Requirements
+
+**Real-time Dashboards (< 100ms):**
+- **Architecture**: Redis cache + pre-computed results
+- **Data**: Last 24 hours only
+- **Approximation**: Count-Min Sketch acceptable
+- **Use Case**: Live leaderboards, trending topics
+
+**Analytics Queries (< 1 second):**
+- **Architecture**: Time Series DB + materialized views
+- **Data**: Last 30 days
+- **Approximation**: Minimal, prefer exact counts
+- **Use Case**: Business reports, user analytics
+
+**Historical Analysis (< 1 minute):**
+- **Architecture**: HDFS + Presto/Spark
+- **Data**: All historical data
+- **Approximation**: None, exact computation
+- **Use Case**: Data science, compliance reporting
+
+### Geographic Distribution Strategy
+
+**Active-Active Regions:**
+```mermaid
+graph TD
+    US[US Region] --> SYNC[Cross-Region Sync]
+    EU[EU Region] --> SYNC
+    ASIA[Asia Region] --> SYNC
+    
+    SYNC --> CONFLICT[Conflict Resolution]
+    CONFLICT --> MERGE[Merge Strategy]
+    
+    MERGE --> TIMESTAMP[Timestamp-based]
+    MERGE --> VECTOR[Vector Clocks]
+    MERGE --> CONSENSUS[Consensus Protocol]
+```
+
+**Implementation Options:**
+- **Timestamp-based**: Last-write-wins with conflict detection
+- **Vector Clocks**: Track causality across regions
+- **CRDTs**: Conflict-free replicated data types
+- **Event Sourcing**: Replay events to resolve conflicts
+
+---
 
 ## Conclusion
 
-This Top-K Leaderboard system design provides a comprehensive scaling strategy from 0 to millions of users:
+This Top-K Leaderboard system design demonstrates the evolution from a simple MVP to an enterprise-scale solution. The key architectural decisions are driven by:
 
-### **Scaling Journey Summary:**
+1. **Scalability requirements**: From single database to distributed processing
+2. **Performance needs**: From synchronous to asynchronous processing
+3. **Reliability demands**: From single points of failure to fault-tolerant systems
+4. **Cost optimization**: From vertical to horizontal scaling
 
-**Phase 1 (0-1K users)**: Simple database solution
-- **Focus**: Speed to market, minimal complexity
-- **Architecture**: Monolithic, single database
-- **Cost**: Low infrastructure costs
+The technology choices reflect a balance between performance, complexity, and maintainability, with each phase building upon the previous one while addressing new challenges as the system scales.
 
-**Phase 2 (1K-100K users)**: Caching and optimization
-- **Focus**: Performance optimization, user experience
-- **Architecture**: Load balancing, caching layers
-- **Cost**: Moderate infrastructure scaling
-
-**Phase 3 (100K-1M users)**: Distributed processing
-- **Focus**: Real-time capabilities, scalability
-- **Architecture**: Message queues, stream processing
-- **Cost**: Significant infrastructure investment
-
-**Phase 4 (1M+ users)**: Global enterprise solution
-- **Focus**: Global reach, enterprise reliability
-- **Architecture**: Multi-region, microservices
-- **Cost**: Enterprise-level infrastructure
-
-### **Key Architectural Decisions:**
-
-1. **Hybrid Approach**: Combines exact and approximate solutions
-   - **Why**: Balances accuracy with performance
-   - **Alternatives**: Single approach would be limiting
-
-2. **Count-Min Sketch**: Approximate counting algorithm
-   - **Why**: Memory-efficient, fast updates
-   - **Alternatives**: Exact counting too expensive at scale
-
-3. **Time Series Database**: Optimized for time-based queries
-   - **Why**: Natural fit for leaderboard queries
-   - **Alternatives**: Relational databases less efficient
-
-4. **Stream Processing**: Real-time event processing
-   - **Why**: Enables real-time leaderboards
-   - **Alternatives**: Batch-only processing too slow
-
-### **Technology Stack Evolution:**
-
-**Phase 1**: PostgreSQL + Redis + Simple API
-**Phase 2**: PostgreSQL + Redis + Load Balancer + CDN
-**Phase 3**: Kafka + Flink + InfluxDB + Microservices
-**Phase 4**: Multi-region + Global CDN + Advanced monitoring
-
-### **Performance Characteristics:**
-
-- **Write Latency**: < 10ms (all phases)
-- **Read Latency**: < 100ms (approximate), < 5s (exact)
-- **Throughput**: Scales from 100 events/sec to 100,000+ events/sec
-- **Availability**: 99.9% (Phase 1) to 99.99% (Phase 4)
-
-### **Cost Considerations:**
-
-- **Phase 1**: $100-500/month
-- **Phase 2**: $1,000-5,000/month
-- **Phase 3**: $10,000-50,000/month
-- **Phase 4**: $100,000+/month
-
-### **Implementation Recommendations:**
-
-1. **Start Simple**: Begin with Phase 1 architecture
-2. **Monitor Growth**: Track metrics to identify scaling needs
-3. **Plan Transitions**: Design for smooth phase transitions
-4. **Optimize Continuously**: Regular performance tuning
-5. **Prepare for Scale**: Design with future growth in mind
-
-### **Key Success Factors:**
-
-- **Right-sizing**: Choose appropriate architecture for current scale
-- **Monitoring**: Comprehensive observability at all phases
-- **Flexibility**: Architecture that can evolve with requirements
-- **Performance**: Consistent user experience across all scales
-- **Reliability**: High availability and fault tolerance
-
-This design provides a clear path from startup MVP to enterprise-scale system, with specific guidance on when and why to make architectural transitions.
+The design emphasizes the "why" behind each decision, providing alternatives and trade-offs to help understand the reasoning process. This approach ensures that the system can evolve and adapt as requirements change and new technologies emerge.
