@@ -276,71 +276,71 @@ graph TB
 
 ```mermaid
 graph TD
-    ES[Events Stream] --> KP[Kafka Partitions<br/>1, 2, ..., N]
+    ES["Events Stream"] --> KP["Kafka Partitions<br/>1, 2, ..., N"]
     
-    KP --> SSW[Spark Streaming Windows]
-    SSW --> W1[1 minute]
-    SSW --> W5[5 minutes]
-    SSW --> WH[1 hour]
+    KP --> SSW["Spark Streaming Windows"]
+    SSW --> W1["1 minute"]
+    SSW --> W5["5 minutes"]
+    SSW --> WH["1 hour"]
     
-    W1 --> CMS[Count-Min Sketch]
+    W1 --> CMS["Count-Min Sketch"]
     W5 --> CMS
     WH --> CMS
     
-    CMS --> HF1[Hash Function 1]
-    CMS --> HF2[Hash Function 2]
-    CMS --> HFD[Hash Function D]
+    CMS --> HF1["Hash Function 1"]
+    CMS --> HF2["Hash Function 2"]
+    CMS --> HFD["Hash Function D"]
     
-    HF1 --> TK[Top-K Calculation]
+    HF1 --> TK["Top-K Calculation"]
     HF2 --> TK
     HFD --> TK
     
-    TK --> MH10[MinHeap Top 10]
-    TK --> MH50[MinHeap Top 50]
-    TK --> MH100[MinHeap Top 100]
+    TK --> MH10["MinHeap Top 10"]
+    TK --> MH50["MinHeap Top 50"]
+    TK --> MH100["MinHeap Top 100"]
     
-    MH10 --> SC[Storage & Cache]
+    MH10 --> SC["Storage & Cache"]
     MH50 --> SC
     MH100 --> SC
     
-    SC --> REDIS[Redis Cache]
-    SC --> HDFS[HDFS Archive]
-    SC --> TS[Time Series Query]
+    SC --> REDIS["Redis Cache"]
+    SC --> HDFS["HDFS Archive"]
+    SC --> TS["Time Series Query"]
 ```
 
 ## Detailed Processing Architecture
 
 ```mermaid
 graph TD
-    EI[Event Ingestion] --> KT[Kafka Topics]
+    EI["Event Ingestion"] --> KT["Kafka Topics"]
     
-    KT --> ET[events]
-    KT --> MT[metadata]
-    KT --> AT[alerts]
+    KT --> ET["events"]
+    KT --> MT["metadata"]
+    KT --> AT["alerts"]
     
-    ET --> SSJ[Spark Streaming Jobs]
+    ET --> SSJ["Spark Streaming Jobs"]
     MT --> SSJ
     AT --> SSJ
     
-    SSJ --> J1[Job 1:<br/>Real-time Processing]
-    SSJ --> J2[Job 2:<br/>Batch Processing]
-    SSJ --> J3[Job 3:<br/>Historical Processing]
+    SSJ --> J1["Job 1:<br/>Real-time Processing"]
+    SSJ --> J2["Job 2:<br/>Batch Processing"]
+    SSJ --> J3["Job 3:<br/>Historical Processing"]
     
-    J1 --> DPP[Data Processing Pipeline]
+    J1 --> DPP["Data Processing Pipeline"]
     J2 --> DPP
     J3 --> DPP
     
-    DPP --> FE[Filter Events]
-    DPP --> CMS[Count-Min Sketch]
-    DPP --> TKS[Top-K Selection]
+    DPP --> FE["Filter Events"]
+    DPP --> CMS["Count-Min Sketch"]
+    DPP --> TKS["Top-K Selection"]
     
-    FE --> OP[Output Processing]
+    FE --> OP["Output Processing"]
     CMS --> OP
     TKS --> OP
     
-    OP --> CU[Cache Update]
-    OP --> DU[Database Update]
-    OP --> AT2[Alert Trigger]
+    OP --> CU["Cache Update"]
+    OP --> DU["Database Update"]
+    OP --> AT2["Alert Trigger"]
 ```
 
 ## Database Schema
@@ -374,9 +374,9 @@ erDiagram
         timestamp updated_at
     }
     
-    EVENTS ||--o{ LEADERBOARD : "generates"
-    METADATA ||--o{ EVENTS : "defines"
-    METADATA ||--o{ LEADERBOARD : "configures"
+    EVENTS ||--o{ LEADERBOARD : generates
+    METADATA ||--o{ EVENTS : defines
+    METADATA ||--o{ LEADERBOARD : configures
 ```
 
 ### Schema Details
